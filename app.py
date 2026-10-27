@@ -149,104 +149,111 @@ def render_gel_simulator(frag_data, ref, alt, pcr_size, enzyme):
 
 # --- SIDEBAR: DATA UPLOAD ---
 st.sidebar.header("📂 Upload Results")
-uploaded_file = st.sidebar.file_uploader("Upload AutoCAPS Excel Report (.xlsx)", type=["xlsx"])
+uploaded_file = st.sidebar.file_uploader("Upload AutoCAPS Report (.xlsx or .csv)", type=["xlsx", "csv"])
 
 if uploaded_file:
-    # 1. Veriyi Oku ve Temizle
-    res_df = pd.read_excel(uploaded_file)
-    
-    # Excel'de string olarak virgülle kaydedilen enzimleri tekrar Python Listesine çevir
-    res_df['Used_Enzyme_List'] = res_df['Used_Enzyme_List'].apply(
-        lambda x: [e.strip() for e in str(x).split(',')] if pd.notna(x) and str(x).strip() else []
-    )
-    
-    # Bütün enzim havuzunu çıkar
-    all_enzymes = []
-    for enz_list in res_df['Used_Enzyme_List']:
-        all_enzymes.extend(enz_list)
-    unique_enzymes = sorted(list(set(all_enzymes)))
-    
-    # FASTA boyutu bilinmediği için görsel harita için kromozom boyutlarını içindeki max POS'a göre %5 toleransla dinamik hesapla
-    chrom_lengths = {}
-    for ch in res_df['FASTA_Header'].unique():
-        if ch != "-" and pd.notna(ch):
-            max_pos = res_df[res_df['FASTA_Header'] == ch]['POS'].max()
-            chrom_lengths[ch] = int(max_pos * 1.05) if pd.notna(max_pos) else 1000000
-
-    # --- DASHBOARD UI ---
-    st.markdown("## 🔍 Dynamic Filtering")
-    c1, c2, c3, c4 = st.columns(4)
-    
-    all_chroms = ["All"] + sorted([ch for ch in res_df['FASTA_Header'].unique() if ch != "-" and pd.notna(ch)])
-    sel_chrom = c1.selectbox("Target Chromosome", all_chroms)
-    sel_start = c2.number_input("Region Start (bp)", value=0, min_value=0)
-    sel_end = c3.number_input("Region End (bp) (0 = All)", value=0, min_value=0)
-    
-    all_enz_opts = ["All Successful Enzymes"] + unique_enzymes
-    sel_enz = c4.selectbox("Restriction Enzyme", all_enz_opts)
-    
-    filt_df = res_df.copy()
-    if sel_chrom != "All":
-        filt_df = filt_df[filt_df['FASTA_Header'] == sel_chrom]
-        if sel_end > 0:
-            filt_df = filt_df[(filt_df['POS'] >= sel_start) & (filt_df['POS'] <= sel_end)]
-    
-    if sel_enz != "All Successful Enzymes":
-        filt_df = filt_df[filt_df['Used_Enzyme_List'].apply(lambda x: sel_enz in x)]
+    # 1. Dosya Uzantısına Göre Okuma İşlemi (CSV veya XLSX)
+    try:
+        if uploaded_file.name.endswith('.csv'):
+            res_df = pd.read_csv(uploaded_file)
+        else:
+            res_df = pd.read_excel(uploaded_file)
+            
+        # Virgülle birleştirilmiş enzimleri tekrar Python listesine çevir
+        res_df['Used_Enzyme_List'] = res_df['Used_Enzyme_List'].apply(
+            lambda x: [e.strip() for e in str(x).split(',')] if pd.notna(x) and str(x).strip() else []
+        )
         
-    st.divider()
-
-    st.markdown("## 📊 1. Marker Statistics")
-    
-    total_snp = len(filt_df)
-    caps_success = len(filt_df[filt_df['Compatible_Enzyme_Count'] > 0])
-    
-    m1, m2 = st.columns(2)
-    m1.markdown(f"<div class='metric-box'><div class='metric-value'>{total_snp}</div><div class='metric-label'>Filtered Markers in View</div></div>", unsafe_allow_html=True)
-    m2.markdown(f"<div class='metric-box'><div class='metric-value'>{caps_success}</div><div class='metric-label'>Successful CAPS Conversions</div></div>", unsafe_allow_html=True)
-    
-    st.divider()
-    
-    st.markdown("## 🌍 2. Interactive Physical Map")
-    if caps_success > 0:
-        fig_map = plot_vertical_map(filt_df, chrom_lengths, sel_enz)
-        st.plotly_chart(fig_map, use_container_width=True)
-    else:
-        st.info("No successful CAPS markers found to map with current filters.")
+        # Bütün enzim havuzunu çıkar
+        all_enzymes = []
+        for enz_list in res_df['Used_Enzyme_List']:
+            all_enzymes.extend(enz_list)
+        unique_enzymes = sorted(list(set(all_enzymes)))
         
-    st.divider()
-    
-    st.markdown("## 🖥️ 3. Virtual Gel Simulator")
-    gel_candidates = filt_df[filt_df['Compatible_Enzyme_Count'] > 0]
-    
-    if gel_candidates.empty:
-        st.warning("No suitable polymorphic cut profile found for gel simulation.")
-    else:
-        col_gel1, col_gel2 = st.columns([1, 2])
-        with col_gel1:
-            selected_snp_id = st.selectbox("Select Target SNP:", gel_candidates['SNP_ID'].tolist())
-            snp_data = gel_candidates[gel_candidates['SNP_ID'] == selected_snp_id].iloc[0]
+        # FASTA boyutu dinamik hesaplama
+        chrom_lengths = {}
+        for ch in res_df['FASTA_Header'].unique():
+            if ch != "-" and pd.notna(ch):
+                max_pos = res_df[res_df['FASTA_Header'] == ch]['POS'].max()
+                chrom_lengths[ch] = int(max_pos * 1.05) if pd.notna(max_pos) else 1000000
+
+        # --- DASHBOARD UI ---
+        st.markdown("## 🔍 Dynamic Filtering")
+        c1, c2, c3, c4 = st.columns(4)
+        
+        all_chroms = ["All"] + sorted([ch for ch in res_df['FASTA_Header'].unique() if ch != "-" and pd.notna(ch)])
+        sel_chrom = c1.selectbox("Target Chromosome", all_chroms)
+        sel_start = c2.number_input("Region Start (bp)", value=0, min_value=0)
+        sel_end = c3.number_input("Region End (bp) (0 = All)", value=0, min_value=0)
+        
+        all_enz_opts = ["All Successful Enzymes"] + unique_enzymes
+        sel_enz = c4.selectbox("Restriction Enzyme", all_enz_opts)
+        
+        filt_df = res_df.copy()
+        if sel_chrom != "All":
+            filt_df = filt_df[filt_df['FASTA_Header'] == sel_chrom]
+            if sel_end > 0:
+                filt_df = filt_df[(filt_df['POS'] >= sel_start) & (filt_df['POS'] <= sel_end)]
+        
+        if sel_enz != "All Successful Enzymes":
+            filt_df = filt_df[filt_df['Used_Enzyme_List'].apply(lambda x: sel_enz in x)]
             
-            ref_allele = snp_data['REF']
-            alt_allele = snp_data['ALT']
-            pcr_size = snp_data['PCR_Size_bp']
-            enz_list = snp_data['Used_Enzyme_List']
-            profile_str = snp_data['CAPS_Restriction_Profile']
+        st.divider()
+
+        st.markdown("## 📊 1. Marker Statistics")
+        
+        total_snp = len(filt_df)
+        caps_success = len(filt_df[filt_df['Compatible_Enzyme_Count'] > 0])
+        
+        m1, m2 = st.columns(2)
+        m1.markdown(f"<div class='metric-box'><div class='metric-value'>{total_snp}</div><div class='metric-label'>Filtered Markers in View</div></div>", unsafe_allow_html=True)
+        m2.markdown(f"<div class='metric-box'><div class='metric-value'>{caps_success}</div><div class='metric-label'>Successful CAPS Conversions</div></div>", unsafe_allow_html=True)
+        
+        st.divider()
+        
+        st.markdown("## 🌍 2. Interactive Physical Map")
+        if caps_success > 0:
+            fig_map = plot_vertical_map(filt_df, chrom_lengths, sel_enz)
+            st.plotly_chart(fig_map, use_container_width=True)
+        else:
+            st.info("No successful CAPS markers found to map with current filters.")
             
-            selected_snp_enz = st.selectbox("Select Restriction Enzyme:", enz_list)
-            frag_dict = parse_profile_for_gel(profile_str, selected_snp_enz, ref_allele, alt_allele, pcr_size)
-            
-            st.info(f"**Target SNP:** {selected_snp_id}\n\n"
-                    f"**PCR Amplicon Size:** {pcr_size} bp\n\n"
-                    f"**Allele 1 ({ref_allele}):** {frag_dict.get(ref_allele, [pcr_size])} bp\n\n"
-                    f"**Allele 2 ({alt_allele}):** {frag_dict.get(alt_allele, [pcr_size])} bp")
-                    
-        with col_gel2:
-            fig_gel = render_gel_simulator(frag_dict, ref_allele, alt_allele, pcr_size, selected_snp_enz)
-            st.pyplot(fig_gel)
-            
-    st.divider()
-    st.markdown("## 💾 4. Data Preview")
-    st.dataframe(filt_df.drop(columns=['Used_Enzyme_List'], errors='ignore'))
+        st.divider()
+        
+        st.markdown("## 🖥️ 3. Virtual Gel Simulator")
+        gel_candidates = filt_df[filt_df['Compatible_Enzyme_Count'] > 0]
+        
+        if gel_candidates.empty:
+            st.warning("No suitable polymorphic cut profile found for gel simulation.")
+        else:
+            col_gel1, col_gel2 = st.columns([1, 2])
+            with col_gel1:
+                selected_snp_id = st.selectbox("Select Target SNP:", gel_candidates['SNP_ID'].tolist())
+                snp_data = gel_candidates[gel_candidates['SNP_ID'] == selected_snp_id].iloc[0]
+                
+                ref_allele = snp_data['REF']
+                alt_allele = snp_data['ALT']
+                pcr_size = snp_data['PCR_Size_bp']
+                enz_list = snp_data['Used_Enzyme_List']
+                profile_str = snp_data['CAPS_Restriction_Profile']
+                
+                selected_snp_enz = st.selectbox("Select Restriction Enzyme:", enz_list)
+                frag_dict = parse_profile_for_gel(profile_str, selected_snp_enz, ref_allele, alt_allele, pcr_size)
+                
+                st.info(f"**Target SNP:** {selected_snp_id}\n\n"
+                        f"**PCR Amplicon Size:** {pcr_size} bp\n\n"
+                        f"**Allele 1 ({ref_allele}):** {frag_dict.get(ref_allele, [pcr_size])} bp\n\n"
+                        f"**Allele 2 ({alt_allele}):** {frag_dict.get(alt_allele, [pcr_size])} bp")
+                        
+            with col_gel2:
+                fig_gel = render_gel_simulator(frag_dict, ref_allele, alt_allele, pcr_size, selected_snp_enz)
+                st.pyplot(fig_gel)
+                
+        st.divider()
+        st.markdown("## 💾 4. Data Preview")
+        st.dataframe(filt_df.drop(columns=['Used_Enzyme_List'], errors='ignore'))
+
+    except Exception as e:
+        st.error(f"Dosya okunurken bir hata oluştu. Lütfen dosya formatını kontrol edin. Hata detayı: {str(e)}")
 else:
-    st.info("👈 Please upload your `AutoCAPS_...xlsx` report from the sidebar to visualize the dashboard.")
+    st.info("👈 Please upload your `AutoCAPS_...csv` or `.xlsx` report from the sidebar to visualize the dashboard.")
