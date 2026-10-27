@@ -3,7 +3,6 @@ import streamlit as st
 import pandas as pd
 import re
 import io
-import matplotlib.subplots as plt_sub
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import plotly.graph_objects as go
@@ -58,7 +57,7 @@ def plot_vertical_map(df, chrom_lengths, selected_enzyme, sel_chroms):
         if length_mb > max_len_mb:
             max_len_mb = length_mb
         
-        # Kromozom çubuğunu çiz (Sadece seçilenler çizilir)
+        # Kromozom çubuğunu çiz
         fig.add_trace(go.Scatter(
             x=[chrom, chrom], y=[0, length_mb], 
             mode='lines', line=dict(color='lightgray', width=8), 
@@ -193,7 +192,6 @@ if uploaded_file:
         st.markdown("## 🔍 Dynamic Filtering")
         c1, c2, c3, c4 = st.columns(4)
         
-        # Çoklu seçim kutusuna geçiş
         all_chroms = sorted([ch for ch in res_df['FASTA_Header'].unique() if ch != "-" and pd.notna(ch)])
         sel_chroms = c1.multiselect("Target Chromosome(s)", all_chroms, default=[], help="Leave empty to select all chromosomes")
         
@@ -205,7 +203,6 @@ if uploaded_file:
         
         filt_df = res_df.copy()
         
-        # Seçili kromozom varsa ona göre filtrele
         if sel_chroms:
             filt_df = filt_df[filt_df['FASTA_Header'].isin(sel_chroms)]
             
@@ -230,7 +227,6 @@ if uploaded_file:
         
         st.markdown("## 🌍 2. Interactive Physical Map")
         if caps_success > 0:
-            # Map fonksiyonuna seçilen kromozomları gönderiyoruz
             fig_map = plot_vertical_map(filt_df, chrom_lengths, sel_enz, sel_chroms)
             st.plotly_chart(fig_map, use_container_width=True)
         else:
@@ -281,7 +277,6 @@ if uploaded_file:
                 )
             export_df.to_excel(writer, sheet_name='Filtered_Markers', index=False)
             
-        # Dosya ismini akıllı belirle
         chrom_name_tag = "Selected" if sel_chroms else "All"
         st.download_button(
             label="📂 Download Filtered Results as Excel (.xlsx)",
