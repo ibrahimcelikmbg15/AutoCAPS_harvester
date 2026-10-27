@@ -42,7 +42,8 @@ def plot_vertical_map(df, chrom_lengths, selected_enzyme):
     if selected_enzyme == "All Successful Enzymes":
         plot_df = df[df['Compatible_Enzyme_Count'] > 0]
     else:
-        plot_df = df[df['Used_Enzyme_List'].apply(lambda x: selected_enzyme in x)]
+        # Hata vermemesi için type check yapıyoruz
+        plot_df = df[df['Used_Enzyme_List'].apply(lambda x: isinstance(x, list) and selected_enzyme in x)]
 
     valid_chroms = sorted([ch for ch in chrom_lengths.keys() if chrom_lengths[ch] > 0])
     
@@ -61,7 +62,7 @@ def plot_vertical_map(df, chrom_lengths, selected_enzyme):
         chrom_df = plot_df[plot_df['FASTA_Header'] == chrom]
         if not chrom_df.empty:
             y_vals = chrom_df['POS'] / 1_000_000
-            hover_texts = chrom_df.apply(lambda r: f"SNP: {r['SNP_ID']}<br>POS: {r['POS']}<br>Enzymes: {len(r['Used_Enzyme_List'])}", axis=1)
+            hover_texts = chrom_df.apply(lambda r: f"SNP: {r['SNP_ID']}<br>POS: {r['POS']}<br>Enzymes: {len(r.get('Used_Enzyme_List', []))}", axis=1)
             
             fig.add_trace(go.Scatter(
                 x=[chrom] * len(y_vals), y=y_vals,
@@ -152,22 +153,33 @@ st.sidebar.header("📂 Upload Results")
 uploaded_file = st.sidebar.file_uploader("Upload AutoCAPS Report (.xlsx or .csv)", type=["xlsx", "csv"])
 
 if uploaded_file:
-    # 1. Dosya Uzantısına Göre Okuma İşlemi (CSV veya XLSX)
     try:
+        # 1. Dosya Uzantısına Göre Okuma İşlemi (CSV veya XLSX)
         if uploaded_file.name.endswith('.csv'):
             res_df = pd.read_csv(uploaded_file)
         else:
             res_df = pd.read_excel(uploaded_file)
             
-        # Virgülle birleştirilmiş enzimleri tekrar Python listesine çevir
-        res_df['Used_Enzyme_List'] = res_df['Used_Enzyme_List'].apply(
-            lambda x: [e.strip() for e in str(x).split(',')] if pd.notna(x) and str(x).strip() else []
-        )
+        # 2. Akıllı Sütun Onarımı (Dosyada Used_Enzyme_List yoksa, kendimiz profil metninden üretiriz)
+        if 'Used_Enzyme_List' not in res_df.columns:
+            def extract_enzymes_from_profile(profile_text):
+                if pd.isna(profile_text) or "No Suitable" in str(profile_text) or "ERROR" in str(profile_text):
+                    return []
+                # "TaqI -> Allele A: [150bp] || EcoRI -> ..." profilinden sadece TaqI ve EcoRI'yi koparır
+                return [p.split(" ->")[0].strip() for p in str(profile_text).split(" || ") if " ->" in p]
+            
+            res_df['Used_Enzyme_List'] = res_df['CAPS_Restriction_Profile'].apply(extract_enzymes_from_profile)
+        else:
+            # Eğer sütun varsa normal virgülleri listeye çevir
+            res_df['Used_Enzyme_List'] = res_df['Used_Enzyme_List'].apply(
+                lambda x: [e.strip() for e in str(x).split(',')] if pd.notna(x) and str(x).strip() else []
+            )
         
         # Bütün enzim havuzunu çıkar
         all_enzymes = []
         for enz_list in res_df['Used_Enzyme_List']:
-            all_enzymes.extend(enz_list)
+            if isinstance(enz_list, list):
+                all_enzymes.extend(enz_list)
         unique_enzymes = sorted(list(set(all_enzymes)))
         
         # FASTA boyutu dinamik hesaplama
@@ -196,7 +208,7 @@ if uploaded_file:
                 filt_df = filt_df[(filt_df['POS'] >= sel_start) & (filt_df['POS'] <= sel_end)]
         
         if sel_enz != "All Successful Enzymes":
-            filt_df = filt_df[filt_df['Used_Enzyme_List'].apply(lambda x: sel_enz in x)]
+            filt_df = filt_df[filt_df['Used_Enzyme_List'].apply(lambda x: isinstance(x, list) and sel_enz in x)]
             
         st.divider()
 
@@ -234,10 +246,10 @@ if uploaded_file:
                 ref_allele = snp_data['REF']
                 alt_allele = snp_data['ALT']
                 pcr_size = snp_data['PCR_Size_bp']
-                enz_list = snp_data['Used_Enzyme_List']
+                enz_list = snp_data.get('Used_Enzyme_List', [])
                 profile_str = snp_data['CAPS_Restriction_Profile']
                 
-                selected_snp_enz = st.selectbox("Select Restriction Enzyme:", enz_list)
+                selected_snp_enz = st.selectbox("Select Restriction Enzyme:", enz_list if isinstance(enz_list, list) and len(enz_list) > 0 else ["No Enzyme"])
                 frag_dict = parse_profile_for_gel(profile_str, selected_snp_enz, ref_allele, alt_allele, pcr_size)
                 
                 st.info(f"**Target SNP:** {selected_snp_id}\n\n"
@@ -246,14 +258,15 @@ if uploaded_file:
                         f"**Allele 2 ({alt_allele}):** {frag_dict.get(alt_allele, [pcr_size])} bp")
                         
             with col_gel2:
-                fig_gel = render_gel_simulator(frag_dict, ref_allele, alt_allele, pcr_size, selected_snp_enz)
-                st.pyplot(fig_gel)
+                if selected_snp_enz != "No Enzyme":
+                    fig_gel = render_gel_simulator(frag_dict, ref_allele, alt_allele, pcr_size, selected_snp_enz)
+                    st.pyplot(fig_gel)
                 
         st.divider()
         st.markdown("## 💾 4. Data Preview")
         st.dataframe(filt_df.drop(columns=['Used_Enzyme_List'], errors='ignore'))
 
     except Exception as e:
-        st.error(f"Dosya okunurken bir hata oluştu. Lütfen dosya formatını kontrol edin. Hata detayı: {str(e)}")
+        st.error(f"Dosya işlenirken bir hata oluştu: {str(e)}")
 else:
     st.info("👈 Please upload your `AutoCAPS_...csv` or `.xlsx` report from the sidebar to visualize the dashboard.")
