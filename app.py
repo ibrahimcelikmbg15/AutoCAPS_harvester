@@ -2,6 +2,8 @@
 import streamlit as st
 import pandas as pd
 import re
+import io
+import matplotlib.subplots as plt_sub
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import plotly.graph_objects as go
@@ -36,16 +38,19 @@ st.markdown("### Cloud-Based Dynamic Dashboard for Pre-Processed CAPS Markers")
 st.markdown("<div class='credit-text'>Developed by: Assoc. Prof. Dr. Ibrahim Celik</div>", unsafe_allow_html=True)
 st.divider()
 
-def plot_vertical_map(df, chrom_lengths, selected_enzyme):
+def plot_vertical_map(df, chrom_lengths, selected_enzyme, sel_chroms):
     fig = go.Figure()
     
     if selected_enzyme == "All Successful Enzymes":
         plot_df = df[df['Compatible_Enzyme_Count'] > 0]
     else:
-        # Hata vermemesi için type check yapıyoruz
         plot_df = df[df['Used_Enzyme_List'].apply(lambda x: isinstance(x, list) and selected_enzyme in x)]
 
-    valid_chroms = sorted([ch for ch in chrom_lengths.keys() if chrom_lengths[ch] > 0])
+    # Sadece seçilen kromozomları listele (boşsa hepsini al)
+    if not sel_chroms:
+        valid_chroms = sorted([ch for ch in chrom_lengths.keys() if chrom_lengths[ch] > 0])
+    else:
+        valid_chroms = sorted([ch for ch in sel_chroms if chrom_lengths.get(ch, 0) > 0])
     
     max_len_mb = 0
     for chrom in valid_chroms:
@@ -53,6 +58,7 @@ def plot_vertical_map(df, chrom_lengths, selected_enzyme):
         if length_mb > max_len_mb:
             max_len_mb = length_mb
         
+        # Kromozom çubuğunu çiz (Sadece seçilenler çizilir)
         fig.add_trace(go.Scatter(
             x=[chrom, chrom], y=[0, length_mb], 
             mode='lines', line=dict(color='lightgray', width=8), 
@@ -154,35 +160,29 @@ uploaded_file = st.sidebar.file_uploader("Upload AutoCAPS Report (.xlsx or .csv)
 
 if uploaded_file:
     try:
-        # 1. Dosya Uzantısına Göre Okuma İşlemi (CSV veya XLSX)
         if uploaded_file.name.endswith('.csv'):
             res_df = pd.read_csv(uploaded_file)
         else:
             res_df = pd.read_excel(uploaded_file)
             
-        # 2. Akıllı Sütun Onarımı (Dosyada Used_Enzyme_List yoksa, kendimiz profil metninden üretiriz)
         if 'Used_Enzyme_List' not in res_df.columns:
             def extract_enzymes_from_profile(profile_text):
                 if pd.isna(profile_text) or "No Suitable" in str(profile_text) or "ERROR" in str(profile_text):
                     return []
-                # "TaqI -> Allele A: [150bp] || EcoRI -> ..." profilinden sadece TaqI ve EcoRI'yi koparır
                 return [p.split(" ->")[0].strip() for p in str(profile_text).split(" || ") if " ->" in p]
             
             res_df['Used_Enzyme_List'] = res_df['CAPS_Restriction_Profile'].apply(extract_enzymes_from_profile)
         else:
-            # Eğer sütun varsa normal virgülleri listeye çevir
             res_df['Used_Enzyme_List'] = res_df['Used_Enzyme_List'].apply(
                 lambda x: [e.strip() for e in str(x).split(',')] if pd.notna(x) and str(x).strip() else []
             )
         
-        # Bütün enzim havuzunu çıkar
         all_enzymes = []
         for enz_list in res_df['Used_Enzyme_List']:
             if isinstance(enz_list, list):
                 all_enzymes.extend(enz_list)
         unique_enzymes = sorted(list(set(all_enzymes)))
         
-        # FASTA boyutu dinamik hesaplama
         chrom_lengths = {}
         for ch in res_df['FASTA_Header'].unique():
             if ch != "-" and pd.notna(ch):
@@ -193,8 +193,10 @@ if uploaded_file:
         st.markdown("## 🔍 Dynamic Filtering")
         c1, c2, c3, c4 = st.columns(4)
         
-        all_chroms = ["All"] + sorted([ch for ch in res_df['FASTA_Header'].unique() if ch != "-" and pd.notna(ch)])
-        sel_chrom = c1.selectbox("Target Chromosome", all_chroms)
+        # Çoklu seçim kutusuna geçiş
+        all_chroms = sorted([ch for ch in res_df['FASTA_Header'].unique() if ch != "-" and pd.notna(ch)])
+        sel_chroms = c1.multiselect("Target Chromosome(s)", all_chroms, default=[], help="Leave empty to select all chromosomes")
+        
         sel_start = c2.number_input("Region Start (bp)", value=0, min_value=0)
         sel_end = c3.number_input("Region End (bp) (0 = All)", value=0, min_value=0)
         
@@ -202,10 +204,13 @@ if uploaded_file:
         sel_enz = c4.selectbox("Restriction Enzyme", all_enz_opts)
         
         filt_df = res_df.copy()
-        if sel_chrom != "All":
-            filt_df = filt_df[filt_df['FASTA_Header'] == sel_chrom]
-            if sel_end > 0:
-                filt_df = filt_df[(filt_df['POS'] >= sel_start) & (filt_df['POS'] <= sel_end)]
+        
+        # Seçili kromozom varsa ona göre filtrele
+        if sel_chroms:
+            filt_df = filt_df[filt_df['FASTA_Header'].isin(sel_chroms)]
+            
+        if sel_end > 0:
+            filt_df = filt_df[(filt_df['POS'] >= sel_start) & (filt_df['POS'] <= sel_end)]
         
         if sel_enz != "All Successful Enzymes":
             filt_df = filt_df[filt_df['Used_Enzyme_List'].apply(lambda x: isinstance(x, list) and sel_enz in x)]
@@ -225,7 +230,8 @@ if uploaded_file:
         
         st.markdown("## 🌍 2. Interactive Physical Map")
         if caps_success > 0:
-            fig_map = plot_vertical_map(filt_df, chrom_lengths, sel_enz)
+            # Map fonksiyonuna seçilen kromozomları gönderiyoruz
+            fig_map = plot_vertical_map(filt_df, chrom_lengths, sel_enz, sel_chroms)
             st.plotly_chart(fig_map, use_container_width=True)
         else:
             st.info("No successful CAPS markers found to map with current filters.")
@@ -263,8 +269,26 @@ if uploaded_file:
                     st.pyplot(fig_gel)
                 
         st.divider()
-        st.markdown("## 💾 4. Data Preview")
+        st.markdown("## 💾 4. Data Preview & Excel Export")
         st.dataframe(filt_df.drop(columns=['Used_Enzyme_List'], errors='ignore'))
+        
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            export_df = filt_df.copy()
+            if 'Used_Enzyme_List' in export_df.columns:
+                export_df['Used_Enzyme_List'] = export_df['Used_Enzyme_List'].apply(
+                    lambda x: ", ".join(x) if isinstance(x, list) else str(x)
+                )
+            export_df.to_excel(writer, sheet_name='Filtered_Markers', index=False)
+            
+        # Dosya ismini akıllı belirle
+        chrom_name_tag = "Selected" if sel_chroms else "All"
+        st.download_button(
+            label="📂 Download Filtered Results as Excel (.xlsx)",
+            data=output.getvalue(),
+            file_name=f"AutoCAPS_Harvester_{chrom_name_tag}_Chromosomes_{sel_enz}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
     except Exception as e:
         st.error(f"Dosya işlenirken bir hata oluştu: {str(e)}")
